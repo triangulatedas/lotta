@@ -29,7 +29,7 @@ function renderHighlighted(text, errors, severity) {
 }
 
 export default function MessageBubble({ message, onRetry }) {
-  const { role, text, errors = [], severity, corrected } = message;
+  const { role, text, errors = [], severity, corrected, image } = message;
 
   if (role === "correction") {
     return <div className="bubble correction">🔊 {text}</div>;
@@ -51,7 +51,10 @@ export default function MessageBubble({ message, onRetry }) {
             ♻
           </button>
         )}
-        <div className="bubble user">{renderHighlighted(text, errors, severity)}</div>
+        <div className="bubble user">
+          {image && <img className="user-image" src={image} alt="Hochgeladenes Bild" />}
+          {text && renderHighlighted(text, errors, severity)}
+        </div>
       </div>
       {corrected && (
         <div className="corrected-note">✓ {corrected}</div>

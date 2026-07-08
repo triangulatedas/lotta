@@ -83,6 +83,11 @@ def _build_engine():
         model=MODEL,
         gpu_memory_utilization=GPU_UTIL,
         max_model_len=MAX_MODEL_LEN,
+        # Gemma-3's vision tower is already loaded; allow one image per turn so
+        # the /session/vision path can attach a photo. Bounding this to 1 also
+        # caps vLLM's startup memory-profiling run (which sizes for a dummy
+        # max-image) to a single image — important on the 24 GB card.
+        limit_mm_per_prompt={"image": 1},
     )
     # The tokenizer's chat template formats prompts correctly for whatever
     # model is configured ([INST] for Mistral, ChatML for Qwen, ...)
@@ -106,18 +111,37 @@ async def init_engine() -> None:
         print(f"[llm] engine load failed: {_load_error}", flush=True)
 
 
-async def generate(content: str, max_tokens: int = 500, structured: bool = True) -> str:
+async def generate(
+    content: str, max_tokens: int = 500, structured: bool = True, image=None
+) -> str:
     from vllm import SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
 
     if _engine is None:
         raise RuntimeError("engine not loaded")
 
-    prompt = _tokenizer.apply_chat_template(
-        [{"role": "user", "content": content}],
-        tokenize=False,
-        add_generation_prompt=True,
-    )
+    if image is not None:
+        # Multimodal turn. Build the Gemma-3 chat prompt manually (matching
+        # vLLM's own Gemma-3 example) with a single <start_of_image> sentinel:
+        # vLLM's registered Gemma3 processor expands that one token into
+        # boi + 256 soft image tokens + eoi from the PIL image below. We do NOT
+        # go through the tokenizer's chat template here — the AWQ repo's
+        # template is not guaranteed to render an image placeholder, and manual
+        # construction is decoupled from it.
+        prompt_text = (
+            "<bos><start_of_turn>user\n"
+            f"<start_of_image>{content}<end_of_turn>\n"
+            "<start_of_turn>model\n"
+        )
+        prompt = {"prompt": prompt_text, "multi_modal_data": {"image": image}}
+    else:
+        # Text path — unchanged. The tokenizer's chat template formats prompts
+        # correctly for whatever model is configured.
+        prompt = _tokenizer.apply_chat_template(
+            [{"role": "user", "content": content}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
 
     params = SamplingParams(
         max_tokens=max_tokens,

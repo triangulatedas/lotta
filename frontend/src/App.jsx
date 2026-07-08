@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { health, respond, resetSession, startSession, undoTurn } from "./api.js";
+import { health, respond, resetSession, startSession, undoTurn, vision } from "./api.js";
 import Header from "./components/Header.jsx";
 import ConversationLog from "./components/ConversationLog.jsx";
 import PushToTalkButton from "./components/PushToTalkButton.jsx";
+import TextInput from "./components/TextInput.jsx";
+import ImageButton from "./components/ImageButton.jsx";
 import StatusIndicator from "./components/StatusIndicator.jsx";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition.js";
 import { useSpeechSynthesis } from "./hooks/useSpeechSynthesis.js";
@@ -69,6 +71,47 @@ export default function App() {
     };
   }, [beginSession]);
 
+  // Render a tutor response (correction + reply) and speak it. Shared by the
+  // voice/text turn (handleTranscript) and the image turn (handleImage) since
+  // both receive the identical TutorResponse shape.
+  const applyResponse = useCallback(
+    (userMessage, res, currentMode) => {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "user",
+          ...userMessage,
+          errors: res.errors,
+          severity: res.severity,
+          corrected: res.corrected,
+        },
+      ]);
+
+      const tutorMsgs = [];
+      if (res.severity === "severe" && res.spoken_correction) {
+        tutorMsgs.push({ role: "correction", text: res.spoken_correction });
+      }
+      tutorMsgs.push({ role: "tutor", text: res.reply });
+      setMessages((m) => [...m, ...tutorMsgs]);
+
+      // Conversation: severe corrections are spoken first (SPEC order).
+      // Training: hearing the right sentence is the point — always speak
+      // the corrected sentence before the feedback, any severity.
+      const toSpeak = tutorMsgs.map((t) => t.text);
+      if (currentMode === "training" && res.corrected && !res.spoken_correction) {
+        toSpeak.unshift(res.corrected);
+      }
+
+      if (mutedRef.current) {
+        setStatus("idle");
+      } else {
+        setStatus("speaking");
+        speak(toSpeak, () => setStatus("idle"));
+      }
+    },
+    [speak]
+  );
+
   const handleTranscript = useCallback(
     async (text) => {
       if (!text.trim()) {
@@ -88,42 +131,7 @@ export default function App() {
           sttLangRef.current
         ] ?? "de";
         const res = await respond(sessionIdRef.current, text, currentMode, inputLang);
-        setMessages((m) => [
-          ...m,
-          {
-            role: "user",
-            text,
-            errors: res.errors,
-            severity: res.severity,
-            corrected: res.corrected,
-          },
-        ]);
-
-        const tutorMsgs = [];
-        if (res.severity === "severe" && res.spoken_correction) {
-          tutorMsgs.push({ role: "correction", text: res.spoken_correction });
-        }
-        tutorMsgs.push({ role: "tutor", text: res.reply });
-        setMessages((m) => [...m, ...tutorMsgs]);
-
-        // Conversation: severe corrections are spoken first (SPEC order).
-        // Training: hearing the right sentence is the point — always speak
-        // the corrected sentence before the feedback, any severity.
-        const toSpeak = tutorMsgs.map((t) => t.text);
-        if (
-          currentMode === "training" &&
-          res.corrected &&
-          !res.spoken_correction
-        ) {
-          toSpeak.unshift(res.corrected);
-        }
-
-        if (mutedRef.current) {
-          setStatus("idle");
-        } else {
-          setStatus("speaking");
-          speak(toSpeak, () => setStatus("idle"));
-        }
+        applyResponse({ text }, res, currentMode);
       } catch (e) {
         setMessages((m) => [
           ...m,
@@ -132,7 +140,33 @@ export default function App() {
         setStatus("idle");
       }
     },
-    [speak]
+    [applyResponse]
+  );
+
+  // Image turn: Lotta "sees" the photo, describes it and names objects in
+  // German. `err` is set when the picker/downscale failed client-side.
+  const handleImage = useCallback(
+    async (dataUrl, err) => {
+      if (err || !dataUrl) {
+        if (err) {
+          setMessages((m) => [...m, { role: "tutor", text: `⚠ ${err}` }]);
+        }
+        return;
+      }
+      setStatus("thinking");
+      try {
+        const res = await vision(sessionIdRef.current, dataUrl);
+        // text "" keeps the user bubble to just the thumbnail
+        applyResponse({ text: "", image: dataUrl }, res, "conversation");
+      } catch (e) {
+        setMessages((m) => [
+          ...m,
+          { role: "tutor", text: `⚠ Verbindungsfehler: ${e.message}` },
+        ]);
+        setStatus("idle");
+      }
+    },
+    [applyResponse]
   );
 
   const STT_ERRORS = {
@@ -188,13 +222,18 @@ export default function App() {
   const talkRef = useRef({ press: () => {}, release: () => {} });
   talkRef.current = { press: handlePress, release: handleRelease };
   useEffect(() => {
+    // Don't hijack Space while typing in the text field.
+    const isTyping = (e) => {
+      const t = e.target;
+      return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
+    };
     const onKeyDown = (e) => {
-      if (e.code !== "Space" || e.repeat) return;
+      if (e.code !== "Space" || e.repeat || isTyping(e)) return;
       e.preventDefault(); // no page scroll, no activating a focused button
       talkRef.current.press();
     };
     const onKeyUp = (e) => {
-      if (e.code !== "Space") return;
+      if (e.code !== "Space" || isTyping(e)) return;
       e.preventDefault();
       talkRef.current.release();
     };
@@ -297,6 +336,10 @@ export default function App() {
             Web Speech API nicht verfügbar — bitte Chrome verwenden.
           </p>
         )}
+        <div className="input-row">
+          <ImageButton disabled={!ready || status !== "idle"} onImage={handleImage} />
+          <TextInput disabled={!ready || status !== "idle"} onSubmit={handleTranscript} />
+        </div>
       </footer>
     </div>
   );

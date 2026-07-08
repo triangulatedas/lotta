@@ -329,3 +329,74 @@ body {
   color: var(--severe);
   font-weight: 600;
 }
+
+/* Text + image input row (type while commuting; upload a photo) */
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 420px;
+}
+
+.image-btn {
+  flex: 0 0 auto;
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #c7c1b8;
+  border-radius: 999px;
+  background: none;
+  cursor: pointer;
+}
+
+.image-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.text-input {
+  display: flex;
+  flex: 1;
+  gap: 0.4rem;
+}
+
+.text-input input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid #c7c1b8;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  background: #fff;
+  color: var(--text);
+}
+
+.text-input input:disabled {
+  opacity: 0.5;
+}
+
+.text-input button {
+  flex: 0 0 auto;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.text-input button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.user-image {
+  display: block;
+  max-width: 220px;
+  width: 100%;
+  height: auto;
+  border-radius: 0.6rem;
+  margin-bottom: 0.4rem;
+}

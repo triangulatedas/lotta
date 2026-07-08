@@ -14,4 +14,4 @@ sleep 3
 pkill -9 -f "VLLM::EngineCore" 2>/dev/null
 sleep 2
 
-exec .venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+exec .venv/bin/uvicorn main:app --host 192.168.3.225 --port 8000
