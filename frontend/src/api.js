@@ -9,7 +9,11 @@ async function post(path, body) {
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`${path} failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(`${path} failed (${res.status})`);
+    err.status = res.status; // let callers recover from a stale session (404)
+    throw err;
+  }
   return res.json();
 }
 

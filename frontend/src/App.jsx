@@ -71,6 +71,22 @@ export default function App() {
     };
   }, [beginSession]);
 
+  // The backend keeps sessions in memory only, so a backend restart drops the
+  // session this tab is still holding and every turn would 404 ("unknown
+  // session_id") until a page reload. Instead, transparently start a fresh
+  // session and retry the turn once. (History on the backend was already lost
+  // in the restart, so nothing extra is thrown away.)
+  const withSession = useCallback(async (fn) => {
+    try {
+      return await fn(sessionIdRef.current);
+    } catch (e) {
+      if (e.status !== 404) throw e;
+      const { session_id } = await startSession();
+      sessionIdRef.current = session_id;
+      return fn(sessionIdRef.current);
+    }
+  }, []);
+
   // Render a tutor response (correction + reply) and speak it. Shared by the
   // voice/text turn (handleTranscript) and the image turn (handleImage) since
   // both receive the identical TutorResponse shape.
@@ -130,7 +146,9 @@ export default function App() {
         const inputLang = { "de-DE": "de", "nb-NO": "no", "en-US": "en" }[
           sttLangRef.current
         ] ?? "de";
-        const res = await respond(sessionIdRef.current, text, currentMode, inputLang);
+        const res = await withSession((sid) =>
+          respond(sid, text, currentMode, inputLang)
+        );
         applyResponse({ text }, res, currentMode);
       } catch (e) {
         setMessages((m) => [
@@ -140,7 +158,7 @@ export default function App() {
         setStatus("idle");
       }
     },
-    [applyResponse]
+    [applyResponse, withSession]
   );
 
   // Image turn: Lotta "sees" the photo, describes it and names objects in
@@ -155,7 +173,7 @@ export default function App() {
       }
       setStatus("thinking");
       try {
-        const res = await vision(sessionIdRef.current, dataUrl);
+        const res = await withSession((sid) => vision(sid, dataUrl));
         // text "" keeps the user bubble to just the thumbnail
         applyResponse({ text: "", image: dataUrl }, res, "conversation");
       } catch (e) {
@@ -166,7 +184,7 @@ export default function App() {
         setStatus("idle");
       }
     },
-    [applyResponse]
+    [applyResponse, withSession]
   );
 
   const STT_ERRORS = {

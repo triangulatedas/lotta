@@ -99,7 +99,11 @@ async def health():
 
 @app.post("/session/start")
 async def session_start():
-    state.reset_all()
+    # Just mint a new session — do NOT wipe existing ones. reset_all() here
+    # meant any second start (page reload, a second device, a Vite HMR
+    # remount, a stray request) destroyed the session another tab was mid-
+    # conversation on, and its next turn 404'd. Sessions are tiny; letting old
+    # ones linger is harmless. Explicit "start over" is /session/reset.
     session_id = state.create_session()
     return {"session_id": session_id, "reply": GREETING}
 
