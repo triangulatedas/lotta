@@ -1,0 +1,4 @@
+# Python 3.12 venv (system 3.14 unsupported by vLLM). Direct deps pinned; vllm brings torch/fastapi/uvicorn pins.
+fastapi==0.136.3
+uvicorn==0.50.0
+vllm==0.24.0

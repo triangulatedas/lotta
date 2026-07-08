@@ -1,0 +1,119 @@
+"""vLLM AsyncLLMEngine wrapper.
+
+SPEC deviation (user-approved): this host is an RTX 4080 *Laptop* GPU with
+12 GB VRAM, not the 16 GB desktop card the spec assumes. Mistral-7B in plain
+float16 (~14.5 GB weights) cannot fit, so we run the same model 4-bit AWQ
+quantized instead. max_model_len must stay capped — the checkpoint advertises
+32k context and the KV cache would not fit otherwise.
+"""
+
+import asyncio
+import os
+import uuid
+
+# This host has only the NVIDIA driver, no CUDA toolkit — flashinfer's
+# sampler JIT-compiles with nvcc and crashes the engine without it. The
+# torch-native sampler needs no compilation. Must be set before the vLLM
+# EngineCore process spawns (it inherits our environment).
+os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
+
+# Overridable per-host without code changes: on a bigger GPU, set e.g.
+#   LOTTA_MODEL="Qwen/Qwen3-32B-AWQ" LOTTA_MAX_LEN=16384 ./restart.sh
+MODEL = os.environ.get("LOTTA_MODEL", "TheBloke/Mistral-7B-Instruct-v0.2-AWQ")
+MAX_MODEL_LEN = int(os.environ.get("LOTTA_MAX_LEN", "8192"))
+GPU_UTIL = float(os.environ.get("LOTTA_GPU_UTIL", "0.85"))
+
+# Guided decoding (xgrammar) constrains generation to this schema — the
+# model *cannot* emit prose, markdown fences, or malformed JSON. The parse
+# fallback chain in parsing.py remains as belt-and-braces (e.g. truncation
+# at max_tokens can still cut a string short).
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "severity": {"type": "string", "enum": ["severe", "minor", "none"]},
+        "corrected": {"type": ["string", "null"]},
+        "errors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "wrong": {"type": "string"},
+                    "right": {"type": "string"},
+                    "note": {"type": "string"},
+                },
+                "required": ["wrong", "right", "note"],
+            },
+        },
+        "spoken_correction": {"type": ["string", "null"]},
+        "reply": {"type": "string"},
+    },
+    "required": ["severity", "corrected", "errors", "spoken_correction", "reply"],
+}
+
+_engine = None
+_tokenizer = None
+_load_error: str | None = None
+
+
+def is_loaded() -> bool:
+    return _engine is not None
+
+
+def load_error() -> str | None:
+    return _load_error
+
+
+def _build_engine():
+    from transformers import AutoTokenizer
+    from vllm import AsyncEngineArgs
+    from vllm.engine.async_llm_engine import AsyncLLMEngine
+
+    args = AsyncEngineArgs(
+        model=MODEL,
+        gpu_memory_utilization=GPU_UTIL,
+        max_model_len=MAX_MODEL_LEN,
+    )
+    # The tokenizer's chat template formats prompts correctly for whatever
+    # model is configured ([INST] for Mistral, ChatML for Qwen, ...)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL)
+    return AsyncLLMEngine.from_engine_args(args), tokenizer
+
+
+async def init_engine() -> None:
+    """Load the model and run a warmup generation (first generation after
+    load is slow due to CUDA graph capture; the warmup keeps real turns
+    inside the latency budget)."""
+    global _engine, _tokenizer, _load_error
+    try:
+        _engine, _tokenizer = await asyncio.get_running_loop().run_in_executor(
+            None, _build_engine
+        )
+        await generate("Sag hallo.", max_tokens=8, structured=False)
+        print("[llm] engine loaded and warmed up", flush=True)
+    except Exception as e:  # surfaced via /health, server stays up
+        _load_error = f"{type(e).__name__}: {e}"
+        print(f"[llm] engine load failed: {_load_error}", flush=True)
+
+
+async def generate(content: str, max_tokens: int = 500, structured: bool = True) -> str:
+    from vllm import SamplingParams
+    from vllm.sampling_params import StructuredOutputsParams
+
+    if _engine is None:
+        raise RuntimeError("engine not loaded")
+
+    prompt = _tokenizer.apply_chat_template(
+        [{"role": "user", "content": content}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    params = SamplingParams(
+        max_tokens=max_tokens,
+        temperature=0.4,
+        structured_outputs=StructuredOutputsParams(json=RESPONSE_SCHEMA) if structured else None,
+    )
+    final = None
+    async for output in _engine.generate(prompt, params, request_id=str(uuid.uuid4())):
+        final = output
+    return final.outputs[0].text if final and final.outputs else ""
