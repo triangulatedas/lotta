@@ -7,34 +7,41 @@ minor errors as inline highlighted notes. See `SPEC.md` for the full specificati
 ## Requirements
 
 - Linux with an NVIDIA GPU + driver ≥ 550 (`nvidia-smi` to verify)
-- Node 18+
+- Node **20.19+ / 22.12+** (Vite requirement). The system Node may be older;
+  use [`nvm`](https://github.com/nvm-sh/nvm) (`nvm install 22`) — `start.sh`
+  loads it automatically, and `frontend/.nvmrc` pins the version.
 - Chrome/Chromium (Web Speech API STT) with an internet connection
   (Google servers do the speech recognition — accepted for v1)
 - `uv` (used to provide Python 3.12 — vLLM does not support system Python 3.14)
 
-## Deviation from SPEC.md (user-approved 2026-07-04)
+## Current host (2026-07): Threadripper + RTX 3090 (24 GB)
 
-The spec assumes an RTX 4080 with **16 GB** VRAM and Mistral-7B in plain
-float16. This host has an RTX 4080 **Laptop** GPU with **12 GB**, where fp16
-weights (~14.5 GB) cannot fit. The backend therefore runs the same model
-**4-bit AWQ quantized**: `TheBloke/Mistral-7B-Instruct-v0.2-AWQ` (~4.2 GB,
-not gated — no HuggingFace login needed). `max_model_len` is capped at 8192
-so the KV cache fits.
+The project began on a 12 GB RTX 4080 Laptop GPU (Mistral-7B AWQ was all that
+fit). It now runs on an RTX 3090 with **24 GB**, so the default model is
+**Gemma-3-27B**, 4-bit AWQ quantized — Google's Gemma is exceptionally strong
+at German. The checkpoint is `gaunernst/gemma-3-27b-it-int4-awq` (~15 GB, not
+gated — no HuggingFace login needed).
 
-## Swapping the model (e.g. after a GPU upgrade)
+Gemma 3 is a *multimodal* checkpoint (vLLM also loads its vision tower) with a
+256k-token vocab, so its fixed VRAM overhead is large. Defaults in
+`backend/llm.py` therefore use `GPU_UTIL=0.94` and cap `max_model_len` at
+**4096** — ample for a spoken back-and-forth. If engine init fails with an
+"available KV cache memory" error, lower `LOTTA_MAX_LEN`.
+
+## Swapping the model
 
 The model is pure configuration — prompts use the model's own chat template,
-so any instruct model works. On a 32 GB card, for example:
+so any instruct model works:
 
 ```bash
-LOTTA_MODEL="Qwen/Qwen3-32B-AWQ" LOTTA_MAX_LEN=16384 LOTTA_GPU_UTIL=0.9 ./backend/restart.sh
+LOTTA_MODEL="Qwen/Qwen2.5-32B-Instruct-AWQ" LOTTA_MAX_LEN=8192 LOTTA_GPU_UTIL=0.92 ./backend/restart.sh
 ```
 
 `LOTTA_MODEL` (HF repo id), `LOTTA_MAX_LEN` (context cap), `LOTTA_GPU_UTIL`
-default to the 12 GB-laptop-safe values in `backend/llm.py`. First run of a
-new model downloads its weights. If the backend runs on a different machine
-than the browser, adjust `BASE` in `frontend/src/api.js` and the CORS
-origins in `backend/main.py`.
+default to the 24 GB values in `backend/llm.py`. First run of a new model
+downloads its weights. If the backend runs on a different machine than the
+browser, adjust `BASE` in `frontend/src/api.js` and the CORS origins in
+`backend/main.py`.
 
 ## Setup
 
@@ -44,7 +51,7 @@ uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
-Frontend:
+Frontend (with Node 20.19+/22.12+ active — e.g. `nvm use`):
 
 ```bash
 cd frontend
@@ -63,7 +70,7 @@ cd frontend && npm run dev
 
 Open http://localhost:5173 in Chrome. The UI shows "Modell lädt …" and polls
 `/health` until vLLM finishes loading (~30–60 s; first ever run also downloads
-~4.2 GB of weights), then Lotta greets you and asks for a topic.
+~15 GB of weights), then Lotta greets you and asks for a topic.
 
 ## Quick backend check
 

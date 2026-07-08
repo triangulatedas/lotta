@@ -1,10 +1,13 @@
 """vLLM AsyncLLMEngine wrapper.
 
-SPEC deviation (user-approved): this host is an RTX 4080 *Laptop* GPU with
-12 GB VRAM, not the 16 GB desktop card the spec assumes. Mistral-7B in plain
-float16 (~14.5 GB weights) cannot fit, so we run the same model 4-bit AWQ
-quantized instead. max_model_len must stay capped — the checkpoint advertises
-32k context and the KV cache would not fit otherwise.
+Host (2026-07): Threadripper rig with an RTX 3090 (24 GB VRAM). The 24 GB
+lets us run Gemma-3-27B (Google's, exceptionally strong at German) as a 4-bit
+AWQ quant — ~15 GB weights, leaving comfortable KV-cache headroom.
+max_model_len is capped well below the checkpoint's 128k context so the KV
+cache stays small and turn latency low.
+
+(History: the project began on an RTX 4080 *Laptop* GPU with only 12 GB, where
+just Mistral-7B AWQ fit. The model is pure configuration — see below.)
 """
 
 import asyncio
@@ -17,11 +20,19 @@ import uuid
 # EngineCore process spawns (it inherits our environment).
 os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
 
-# Overridable per-host without code changes: on a bigger GPU, set e.g.
-#   LOTTA_MODEL="Qwen/Qwen3-32B-AWQ" LOTTA_MAX_LEN=16384 ./restart.sh
-MODEL = os.environ.get("LOTTA_MODEL", "TheBloke/Mistral-7B-Instruct-v0.2-AWQ")
-MAX_MODEL_LEN = int(os.environ.get("LOTTA_MAX_LEN", "8192"))
-GPU_UTIL = float(os.environ.get("LOTTA_GPU_UTIL", "0.85"))
+# Overridable per-host without code changes, e.g. to try a different model:
+#   LOTTA_MODEL="Qwen/Qwen2.5-32B-Instruct-AWQ" LOTTA_MAX_LEN=8192 ./restart.sh
+#
+# Gemma-3-27B is a *multimodal* checkpoint: vLLM also loads its vision tower,
+# and the model has a 256k-token vocab (large embedding + logits buffers).
+# That fixed overhead leaves less room for the KV cache than a plain text
+# model of the same weight size, so we run a high memory fraction and a
+# modest context cap (4096 is ample for a spoken back-and-forth with the
+# capped history in prompts.py). Symptom if these are too aggressive:
+# "available KV cache memory" ValueError at engine init — lower MAX_LEN.
+MODEL = os.environ.get("LOTTA_MODEL", "gaunernst/gemma-3-27b-it-int4-awq")
+MAX_MODEL_LEN = int(os.environ.get("LOTTA_MAX_LEN", "4096"))
+GPU_UTIL = float(os.environ.get("LOTTA_GPU_UTIL", "0.94"))
 
 # Guided decoding (xgrammar) constrains generation to this schema — the
 # model *cannot* emit prose, markdown fences, or malformed JSON. The parse
